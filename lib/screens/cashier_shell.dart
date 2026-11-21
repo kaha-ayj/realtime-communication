@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
 
@@ -269,7 +270,7 @@ class _MenuGrid extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 190,
-        childAspectRatio: 0.78,
+        childAspectRatio: 0.66,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
       ),
@@ -310,37 +311,54 @@ class _MenuCard extends StatelessWidget {
               : null,
         ),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Emoji + qty badge
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              // Foto produk + qty badge
+              Stack(
                 children: [
-                  Text(menu.emoji, style: const TextStyle(fontSize: 32)),
+                  AspectRatio(
+                    aspectRatio: 1.5,
+                    child: MenuPhoto(
+                      menu: menu,
+                      width: double.infinity,
+                      borderRadius: 14,
+                      emojiSize: 34,
+                    ),
+                  ),
                   if (qty > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: PosColors.primary,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '$qty',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12,
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: PosColors.primary,
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(25),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          '$qty',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(
                 menu.name,
                 style: const TextStyle(

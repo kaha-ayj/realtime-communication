@@ -4,6 +4,7 @@ import '../models/order.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 
 class ReceiptScreen extends StatelessWidget {
   const ReceiptScreen({super.key, required this.order});
@@ -144,9 +145,14 @@ class ReceiptScreen extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(vertical: 6),
                             child: Row(
                               children: [
-                                Text(
-                                  item.emoji,
-                                  style: const TextStyle(fontSize: 20),
+                                ProductPhoto(
+                                  name: item.name,
+                                  imageUrl: item.imageUrl,
+                                  emoji: item.emoji,
+                                  width: 30,
+                                  height: 30,
+                                  borderRadius: 9,
+                                  emojiSize: 16,
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(

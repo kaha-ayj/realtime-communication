@@ -9,6 +9,7 @@ class MenuItem {
     required this.description,
     required this.emoji,
     required this.isAvailable,
+    this.imageUrl,
     this.createdAt,
     this.updatedAt,
   });
@@ -19,6 +20,9 @@ class MenuItem {
   final int price;
   final String description;
   final String emoji;
+
+  /// URL foto produk. Bila kosong, foto dicari otomatis dari nama menu.
+  final String? imageUrl;
   final bool isAvailable;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -29,6 +33,7 @@ class MenuItem {
     int? price,
     String? description,
     String? emoji,
+    String? imageUrl,
     bool? isAvailable,
   }) {
     return MenuItem(
@@ -38,6 +43,7 @@ class MenuItem {
       price: price ?? this.price,
       description: description ?? this.description,
       emoji: emoji ?? this.emoji,
+      imageUrl: imageUrl ?? this.imageUrl,
       isAvailable: isAvailable ?? this.isAvailable,
       createdAt: createdAt,
       updatedAt: updatedAt,
@@ -51,6 +57,7 @@ class MenuItem {
       'price': price,
       'description': description.trim(),
       'emoji': emoji,
+      'imageUrl': imageUrl?.trim(),
       'isAvailable': isAvailable,
     };
   }
@@ -65,6 +72,9 @@ class MenuItem {
       emoji: (map['emoji'] as String?)?.isNotEmpty == true
           ? map['emoji'] as String
           : '🍽️',
+      imageUrl: (map['imageUrl'] as String?)?.trim().isNotEmpty == true
+          ? (map['imageUrl'] as String).trim()
+          : null,
       isAvailable: (map['isAvailable'] as bool?) ?? true,
       createdAt: _toDate(map['createdAt']),
       updatedAt: _toDate(map['updatedAt']),

@@ -7,6 +7,7 @@ import '../providers/app_provider.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 import 'payment_screen.dart';
 
 class CartScreen extends StatelessWidget {
@@ -103,20 +104,13 @@ class _CartItemCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            // Emoji
-            Container(
+            // Foto produk
+            MenuPhoto(
+              menu: item.menu,
               width: 56,
               height: 56,
-              decoration: BoxDecoration(
-                color: PosColors.primarySoft,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Center(
-                child: Text(
-                  item.menu.emoji,
-                  style: const TextStyle(fontSize: 26),
-                ),
-              ),
+              borderRadius: 14,
+              emojiSize: 26,
             ),
             const SizedBox(width: 12),
 
@@ -329,6 +323,7 @@ class _CheckoutBarState extends State<_CheckoutBar> {
               price: ci.menu.price,
               quantity: ci.quantity,
               emoji: ci.menu.emoji,
+              imageUrl: ci.menu.imageUrl,
             ),
           )
           .toList();

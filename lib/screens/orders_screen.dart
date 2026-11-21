@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 import 'receipt_screen.dart';
 
 class OrdersScreen extends StatefulWidget {
@@ -310,7 +311,15 @@ class _OrderCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   children: [
-                    Text(item.emoji, style: const TextStyle(fontSize: 20)),
+                    ProductPhoto(
+                      name: item.name,
+                      imageUrl: item.imageUrl,
+                      emoji: item.emoji,
+                      width: 34,
+                      height: 34,
+                      borderRadius: 10,
+                      emojiSize: 18,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(

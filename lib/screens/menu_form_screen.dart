@@ -6,6 +6,7 @@ import '../models/menu_item.dart';
 import '../providers/app_provider.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 
 class MenuFormScreen extends StatefulWidget {
   const MenuFormScreen({super.key, this.menu});
@@ -23,6 +24,7 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
   late final TextEditingController _priceCtrl;
   late final TextEditingController _descCtrl;
   late final TextEditingController _emojiCtrl;
+  late final TextEditingController _imageCtrl;
   late String _category;
   late bool _isAvailable;
   bool _loading = false;
@@ -54,6 +56,7 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
     );
     _descCtrl = TextEditingController(text: m?.description ?? '');
     _emojiCtrl = TextEditingController(text: m?.emoji ?? '🍽️');
+    _imageCtrl = TextEditingController(text: m?.imageUrl ?? '');
     _category = m?.category ?? 'Makanan';
     _isAvailable = m?.isAvailable ?? true;
   }
@@ -64,6 +67,7 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
     _priceCtrl.dispose();
     _descCtrl.dispose();
     _emojiCtrl.dispose();
+    _imageCtrl.dispose();
     super.dispose();
   }
 
@@ -81,6 +85,7 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
         price: int.parse(_priceCtrl.text.trim()),
         description: _descCtrl.text.trim(),
         emoji: _emojiCtrl.text.trim().isEmpty ? '🍽️' : _emojiCtrl.text.trim(),
+        imageUrl: _imageCtrl.text.trim().isEmpty ? null : _imageCtrl.text.trim(),
         isAvailable: _isAvailable,
       );
 
@@ -127,34 +132,46 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
           children: [
-            // Emoji picker
+            // Pratinjau foto produk
             Center(
               child: Column(
                 children: [
                   const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () => _showEmojiPicker(context),
-                    child: Container(
-                      width: 90,
-                      height: 90,
-                      decoration: BoxDecoration(
-                        color: PosColors.primarySoft,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: PosColors.border),
-                      ),
-                      child: Center(
-                        child: Text(
-                          _emojiCtrl.text.isEmpty ? '🍽️' : _emojiCtrl.text,
-                          style: const TextStyle(fontSize: 44),
+                  ListenableBuilder(
+                    listenable: Listenable.merge([_nameCtrl, _imageCtrl]),
+                    builder: (context, _) {
+                      return Container(
+                        width: 108,
+                        height: 108,
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(26),
+                          border: Border.all(color: PosColors.border),
                         ),
-                      ),
-                    ),
+                        child: ProductPhoto(
+                          name: _nameCtrl.text,
+                          imageUrl: _imageCtrl.text,
+                          emoji: _emojiCtrl.text.isEmpty
+                              ? '🍽️'
+                              : _emojiCtrl.text,
+                          width: 100,
+                          height: 100,
+                          borderRadius: 22,
+                          emojiSize: 46,
+                        ),
+                      );
+                    },
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Pratinjau foto produk',
+                    style: TextStyle(fontSize: 12, color: PosColors.textMuted),
+                  ),
                   TextButton.icon(
                     onPressed: () => _showEmojiPicker(context),
-                    icon: const Icon(Icons.edit_rounded, size: 14),
-                    label: const Text('Ganti Emoji'),
+                    icon: const Icon(Icons.emoji_emotions_outlined, size: 14),
+                    label: const Text('Emoji cadangan'),
                     style: TextButton.styleFrom(
                       foregroundColor: PosColors.textMuted,
                       textStyle: const TextStyle(fontSize: 12),
@@ -175,6 +192,43 @@ class _MenuFormScreenState extends State<MenuFormScreen> {
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Nama menu wajib diisi';
                 if (v.trim().length < 2) return 'Nama terlalu pendek';
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+
+            _label('URL Foto Produk (opsional)'),
+            TextFormField(
+              controller: _imageCtrl,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                hintText: 'https://contoh.com/foto-produk.jpg',
+                prefixIcon: const Icon(Icons.image_outlined),
+                helperText:
+                    'Kosongkan agar foto dipilih otomatis sesuai nama menu.',
+                helperMaxLines: 2,
+                suffixIcon: ListenableBuilder(
+                  listenable: _imageCtrl,
+                  builder: (context, _) {
+                    if (_imageCtrl.text.trim().isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return IconButton(
+                      tooltip: 'Hapus URL foto',
+                      onPressed: () => _imageCtrl.clear(),
+                      icon: const Icon(Icons.close_rounded),
+                    );
+                  },
+                ),
+              ),
+              validator: (v) {
+                final value = v?.trim() ?? '';
+                if (value.isEmpty) return null;
+                final uri = Uri.tryParse(value);
+                if (uri == null ||
+                    !(uri.isScheme('http') || uri.isScheme('https'))) {
+                  return 'URL foto harus diawali http:// atau https://';
+                }
                 return null;
               },
             ),
