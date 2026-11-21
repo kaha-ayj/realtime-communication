@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 import 'dashboard_screen.dart';
 import 'menu_form_screen.dart';
 import 'orders_screen.dart';
@@ -309,18 +310,8 @@ class _MenuAdminCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            // Emoji
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: PosColors.primarySoft,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Center(
-                child: Text(menu.emoji, style: const TextStyle(fontSize: 28)),
-              ),
-            ),
+            // Foto produk
+            MenuPhoto(menu: menu, width: 60, height: 60, borderRadius: 14),
             const SizedBox(width: 14),
 
             // Info

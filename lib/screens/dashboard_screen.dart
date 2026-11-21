@@ -6,6 +6,7 @@ import '../providers/app_provider.dart';
 import '../services/order.dart';
 import '../thema.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/menu_photo.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -299,7 +300,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Text(stat.emoji, style: const TextStyle(fontSize: 24)),
+                      ProductPhoto(
+                        name: stat.name,
+                        emoji: stat.emoji,
+                        width: 30,
+                        height: 30,
+                        borderRadius: 9,
+                        emojiSize: 16,
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(

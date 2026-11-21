@@ -27,6 +27,7 @@ class OrderItem {
     required this.price,
     required this.quantity,
     required this.emoji,
+    this.imageUrl,
   });
 
   final String menuId;
@@ -34,6 +35,7 @@ class OrderItem {
   final int price;
   final int quantity;
   final String emoji;
+  final String? imageUrl;
 
   int get subtotal => price * quantity;
 
@@ -44,6 +46,7 @@ class OrderItem {
       'price': price,
       'quantity': quantity,
       'emoji': emoji,
+      'imageUrl': imageUrl,
     };
   }
 
@@ -54,6 +57,9 @@ class OrderItem {
       price: _toInt(map['price']),
       quantity: _toInt(map['quantity']),
       emoji: (map['emoji'] as String?) ?? '🍽️',
+      imageUrl: (map['imageUrl'] as String?)?.trim().isNotEmpty == true
+          ? (map['imageUrl'] as String).trim()
+          : null,
     );
   }
 
