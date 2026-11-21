@@ -1,123 +1,278 @@
 /**
  * MiomiPay Mock Server
- * Express server on port 4000 simulating QRIS payment flow.
  *
- * Endpoints:
- *   GET  /health                     — health check
- *   POST /v1/payments                — create a charge/QR
- *   GET  /v1/payments/:ref           — get payment status
- *   POST /v1/payments/:ref/pay       — simulate successful payment
- *   POST /v1/payments/:ref/cancel    — simulate cancelled payment
+ * Meniru kontrak API MiomiPay (https://pg.miomidev.com/api/v1) sehingga
+ * aplikasi dapat dijalankan tanpa internet:
+ *
+ *   GET  /health
+ *   POST /api/v1/transactions                      (Bearer API key)
+ *   GET  /api/v1/transactions/:snap/status         (publik)
+ *   POST /api/v1/sandbox/:snap/simulate-pay
+ *   POST /api/v1/sandbox/:snap/simulate-expire
+ *
+ * Jalankan:
+ *   cd server && npm install && npm start
+ *
+ * Lalu arahkan aplikasi ke mock:
+ *   flutter run --dart-define=MIOMIPAY_BASE_URL=http://localhost:4000/api/v1 \
+ *               --dart-define=MIOMIPAY_API_KEY=miomipay_sandbox_key
  */
 
 const express = require('express');
 const crypto = require('crypto');
 
 const app = express();
+
+const PORT = Number(process.env.PORT || 4000);
+const API_KEY = process.env.MIOMIPAY_API_KEY || 'miomipay_sandbox_key';
+
+// ── Middleware ───────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Accept, Authorization, X-API-Key, Idempotency-Key'
+  );
+  res.setHeader('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.use(express.json());
 
-// In-memory store: ref → payment record
-const payments = new Map();
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => {
+    console.log(
+      `${req.method.padEnd(6)} ${req.originalUrl.padEnd(44)} ` +
+        `${res.statusCode}  ${Date.now() - started}ms`
+    );
+  });
+  next();
+});
+
+// ── State ────────────────────────────────────────────────────────────────────
+/** @type {Map<string, object>} snap_token → transaction */
+const transactions = new Map();
+/** @type {Array<object>} */
+const webhookLog = [];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+const nowIso = () => new Date().toISOString();
 
-function generateRef() {
-  return 'MIOMI-' + crypto.randomBytes(6).toString('hex').toUpperCase();
+function requiredBearer(req, res, next) {
+  const raw = String(req.headers.authorization || '');
+  if (!raw.startsWith('Bearer ')) {
+    return res.status(401).json({
+      success: false,
+      message: 'Missing API Key in Bearer Token Authorization header',
+    });
+  }
+  if (raw.slice(7).trim() !== API_KEY) {
+    return res.status(401).json({ success: false, message: 'Invalid API Key' });
+  }
+  next();
 }
 
-function generateQrString(ref, amount) {
-  // Minimal QRIS-like string for QR rendering; in production this would be a
-  // real QRIS payload from the payment network.
-  return `00020101021226580014com.miomipay.qris0136${ref}520400005303360540${amount}5802ID5916POS Sederhana6007Jakarta6304ABCD`;
+function buildQrString(snapToken, amount) {
+  return (
+    '00020101021226' +
+    '66' +
+    '0014ID.CO.GOPAY.WWW' +
+    '01189360091800000000000215SANDBOXMIOMIPAY' +
+    '52' +
+    '045499' +
+    '5303360' +
+    '54' +
+    String(amount).padStart(3, '0') +
+    '5802ID' +
+    '5912MIOMIPAY_SB' +
+    '6009INDRAMAYU' +
+    '6304ABCD'
+  );
 }
 
-function now() {
-  return new Date().toISOString();
+function logWebhook(tx, event) {
+  const payload = {
+    event,
+    reference: tx.reference,
+    external_id: tx.external_id,
+    snap_token: tx.snap_token,
+    amount: tx.amount,
+    status: tx.status,
+    paid_at: tx.paid_at,
+    sent_at: nowIso(),
+  };
+  webhookLog.push(payload);
+  console.log(`[WEBHOOK] ${event} → ${tx.snap_token}`);
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'miomipay-mock', time: now() });
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'miomipay-mock',
+    environment: 'sandbox',
+    transactions: transactions.size,
+    time: nowIso(),
+  });
 });
 
-// Create payment / charge
-app.post('/v1/payments', (req, res) => {
-  const { reference, amount, description, currency = 'IDR' } = req.body;
+// Buat transaksi
+app.post('/api/v1/transactions', requiredBearer, (req, res) => {
+  const { external_id, amount, description = '' } = req.body || {};
 
-  if (!reference || !amount) {
-    return res.status(400).json({ error: 'reference and amount are required' });
+  if (!external_id) {
+    return res.status(422).json({
+      message: 'The external id field is required.',
+      errors: { external_id: ['The external id field is required.'] },
+    });
   }
 
-  const ref = reference;
-  const record = {
-    reference: ref,
-    amount: Number(amount),
-    currency,
-    description: description || '',
-    status: 'pending',
-    qr_string: generateQrString(ref, amount),
-    created_at: now(),
+  const amountNumber = Number(amount);
+  if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+    return res.status(422).json({
+      message: 'The amount field is required.',
+      errors: { amount: ['The amount field is required.'] },
+    });
+  }
+
+  const reference =
+    'MP-INV-' +
+    new Date().toISOString().slice(0, 10).replace(/-/g, '') +
+    '-' +
+    crypto.randomBytes(3).toString('hex').toUpperCase();
+  const snapToken = 'snap_' + crypto.randomBytes(16).toString('hex');
+
+  const tx = {
+    reference,
+    external_id,
+    environment: 'sandbox',
+    amount: amountNumber,
+    final_amount: amountNumber,
+    status: 'PENDING',
+    qr_string: buildQrString(snapToken, amountNumber),
+    qr_image_url: `http://localhost:${PORT}/pay/${snapToken}/qr.png`,
+    snap_token: snapToken,
+    checkout_url: `http://localhost:${PORT}/pay/${snapToken}`,
+    expired_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
     paid_at: null,
+    description,
+    created_at: nowIso(),
   };
 
-  payments.set(ref, record);
-  console.log(`[CREATE] ${ref}  Rp ${amount}`);
+  transactions.set(snapToken, tx);
+  console.log(`[CREATE] ${reference}  Rp ${amountNumber.toLocaleString('id-ID')}`);
 
-  return res.status(201).json(record);
+  return res.status(201).json({ success: true, data: tx });
 });
 
-// Get payment status
-app.get('/v1/payments/:ref', (req, res) => {
-  const record = payments.get(req.params.ref);
-  if (!record) {
-    return res.status(404).json({ error: 'Payment not found' });
+// Status transaksi (publik)
+app.get('/api/v1/transactions/:snap/status', (req, res) => {
+  const tx = transactions.get(req.params.snap);
+  if (!tx) {
+    return res.status(404).json({
+      success: false,
+      message: 'Transaction not found.',
+    });
   }
-  return res.json(record);
+
+  if (tx.status === 'PENDING' && new Date(tx.expired_at).getTime() < Date.now()) {
+    tx.status = 'EXPIRED';
+  }
+
+  return res.json({
+    success: true,
+    status: tx.status,
+    is_paid: tx.status === 'PAID',
+    is_expired: tx.status === 'EXPIRED',
+    paid_at: tx.paid_at,
+    success_redirect_url: null,
+    environment: 'sandbox',
+  });
 });
 
-// Simulate successful payment (sandbox)
-app.post('/v1/payments/:ref/pay', (req, res) => {
-  const record = payments.get(req.params.ref);
-  if (!record) {
-    return res.status(404).json({ error: 'Payment not found' });
-  }
-  if (record.status === 'paid') {
-    return res.json(record); // idempotent
+// Simulasi pembayaran sukses
+app.post('/api/v1/sandbox/:snap/simulate-pay', (req, res) => {
+  const tx = transactions.get(req.params.snap);
+  if (!tx) {
+    return res.status(404).json({
+      success: false,
+      message: 'Transaction not found.',
+    });
   }
 
-  record.status = 'paid';
-  record.paid_at = now();
-  payments.set(req.params.ref, record);
-  console.log(`[PAY]    ${req.params.ref}  → paid`);
+  if (tx.status !== 'PAID') {
+    tx.status = 'PAID';
+    tx.paid_at = nowIso();
+    logWebhook(tx, 'transaction.paid');
+  }
 
-  return res.json(record);
+  console.log(`[PAID]   ${tx.snap_token}`);
+  return res.json({
+    success: true,
+    message: 'Simulasi pembayaran sukses! Status transaksi kini PAID.',
+  });
 });
 
-// Simulate cancelled payment (sandbox)
-app.post('/v1/payments/:ref/cancel', (req, res) => {
-  const record = payments.get(req.params.ref);
-  if (!record) {
-    return res.status(404).json({ error: 'Payment not found' });
+// Simulasi kedaluwarsa
+app.post('/api/v1/sandbox/:snap/simulate-expire', (req, res) => {
+  const tx = transactions.get(req.params.snap);
+  if (!tx) {
+    return res.status(404).json({
+      success: false,
+      message: 'Transaction not found.',
+    });
   }
 
-  record.status = 'cancelled';
-  payments.set(req.params.ref, record);
-  console.log(`[CANCEL] ${req.params.ref}  → cancelled`);
-
-  return res.json(record);
+  tx.status = 'EXPIRED';
+  logWebhook(tx, 'transaction.expired');
+  return res.json({ success: true, message: 'Transaksi kini EXPIRED.' });
 });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// Halaman checkout tiruan
+app.get('/pay/:snap', (req, res) => {
+  const tx = transactions.get(req.params.snap);
+  if (!tx) return res.status(404).send('Transaction not found');
+  res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>MiomiPay Mock</title></head>
+<body style="font-family:system-ui;padding:32px">
+  <h2>MiomiPay Sandbox</h2>
+  <p>Invoice: <code>${tx.reference}</code></p>
+  <p>External ID: <code>${tx.external_id}</code></p>
+  <p>Amount: Rp ${tx.amount.toLocaleString('id-ID')}</p>
+  <p>Status: <b>${tx.status}</b></p>
+  <p>QR: <code style="word-break:break-all">${tx.qr_string}</code></p>
+</body></html>`);
+});
 
-const PORT = process.env.PORT || 4000;
+// QR gambar tiruan (placeholder 1x1 transparan)
+app.get('/pay/:snap/qr.png', (_req, res) => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  res.type('png').send(png);
+});
+
+// Debug webhook
+app.get('/api/v1/webhook/test', (_req, res) => {
+  res.json({ total: webhookLog.length, data: webhookLog.slice(-20) });
+});
+
+// ── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`MiomiPay Mock Server running on http://localhost:${PORT}`);
-  console.log('Endpoints:');
-  console.log(`  GET  http://localhost:${PORT}/health`);
-  console.log(`  POST http://localhost:${PORT}/v1/payments`);
-  console.log(`  GET  http://localhost:${PORT}/v1/payments/:ref`);
-  console.log(`  POST http://localhost:${PORT}/v1/payments/:ref/pay`);
-  console.log(`  POST http://localhost:${PORT}/v1/payments/:ref/cancel`);
+  console.log('');
+  console.log('  MiomiPay Mock Server');
+  console.log(`  http://localhost:${PORT}`);
+  console.log(`  api key : ${API_KEY}`);
+  console.log('');
+  console.log('  Arahkan aplikasi dengan:');
+  console.log(
+    `    --dart-define=MIOMIPAY_BASE_URL=http://localhost:${PORT}/api/v1`
+  );
+  console.log(`    --dart-define=MIOMIPAY_API_KEY=${API_KEY}`);
+  console.log('');
 });

@@ -14,58 +14,75 @@ class MiomiPayException implements Exception {
   String toString() => message;
 }
 
-/// Client API MiomiPay.
+/// Client API MiomiPay (https://pg.miomidev.com).
 ///
-/// Kontrak yang dipakai aplikasi:
-/// - `POST /v1/payments` membuat tagihan QRIS.
-/// - `GET /v1/payments/{reference}` mengecek status pembayaran.
-/// - `POST /v1/payments/{reference}/pay` mensimulasikan pembayaran (sandbox).
+/// Kontrak yang dipakai:
+/// - `POST /transactions` (Bearer API key) → membuat tagihan QRIS.
+/// - `GET  /transactions/{snap_token}/status` → status pembayaran.
+/// - `POST /sandbox/{snap_token}/simulate-pay` → simulasi lunas (sandbox).
+/// - `POST /sandbox/{snap_token}/simulate-expire` → simulasi kedaluwarsa.
 ///
-/// Secara default service mengarah ke mock server lokal. Untuk memakai API
-/// asli, jalankan aplikasi dengan:
-/// `--dart-define=MIOMIPAY_BASE_URL=https://...`
-/// `--dart-define=MIOMIPAY_API_KEY=...`
-/// `--dart-define=MIOMIPAY_SANDBOX=false`
+/// Base URL sudah mencakup `/api/v1`, contoh:
+/// `https://pg.miomidev.com/api/v1`.
 class MiomiPayService {
-  MiomiPayService({http.Client? client}) : _client = client ?? http.Client();
+  MiomiPayService({
+    http.Client? client,
+    String? apiKey,
+    String? baseUrl,
+  }) : _client = client ?? http.Client(),
+       _apiKeyOverride = apiKey,
+       _baseUrlOverride = baseUrl;
 
   final http.Client _client;
-  final Duration _timeout = const Duration(seconds: 15);
+  final String? _apiKeyOverride;
+  final String? _baseUrlOverride;
+  final Duration _timeout = const Duration(seconds: 25);
 
-  String get _baseUrl {
-    final value = Config.miomiPayBaseUrl;
-    return value.endsWith('/')
-        ? value.substring(0, value.length - 1)
-        : value;
+  String get _baseUrl => _baseUrlOverride ?? Config.miomiPayBaseUrl;
+
+  String get _apiKey => _apiKeyOverride ?? Config.miomiPayApiKey;
+
+  bool get _hasApiKey => _apiKey.trim().isNotEmpty;
+
+  Map<String, String> get _authHeaders {
+    if (!_hasApiKey) {
+      throw const MiomiPayException(
+        'API key MiomiPay belum diisi. Jalankan aplikasi dengan '
+        '--dart-define-from-file=dart_defines.sandbox.json',
+      );
+    }
+    return {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Authorization': 'Bearer $_apiKey',
+    };
   }
 
-  Map<String, String> get _headers => {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'Authorization': 'Bearer ${Config.miomiPayApiKey}',
-    'X-API-Key': Config.miomiPayApiKey,
-    'X-Merchant-Id': Config.miomiPayMerchantId,
-  };
-
+  /// Membuat tagihan QRIS di MiomiPay.
+  ///
+  /// [reference] dikirim sebagai `external_id` (kode pesanan POS).
   Future<MiomiPayCharge> createCharge({
     required String reference,
     required int amount,
     String description = 'Pembayaran POS',
+    String? customerName,
   }) async {
     try {
+      final payload = <String, dynamic>{
+        'external_id': reference,
+        'amount': amount,
+        'description': description,
+        if (customerName != null && customerName.isNotEmpty)
+          'customer_name': customerName,
+        if (Config.miomiPayCallbackUrl.isNotEmpty)
+          'callback_url': Config.miomiPayCallbackUrl,
+      };
+
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/v1/payments'),
-            headers: _headers,
-            body: jsonEncode({
-              'merchant_id': Config.miomiPayMerchantId,
-              'reference_id': reference,
-              'amount': amount,
-              'currency': 'IDR',
-              'payment_method': 'QRIS',
-              'description': description,
-              'callback_url': 'https://pos.example.com/miomipay/callback',
-            }),
+            Uri.parse('$_baseUrl/transactions'),
+            headers: _authHeaders,
+            body: jsonEncode(payload),
           )
           .timeout(_timeout);
 
@@ -73,8 +90,16 @@ class MiomiPayService {
         throw MiomiPayException(_errorFromResponse(response));
       }
 
+      final decoded = _decode(response.body);
+      if (decoded['success'] == false) {
+        throw MiomiPayException(
+          (decoded['message'] ?? 'MiomiPay menolak pembuatan tagihan.')
+              .toString(),
+        );
+      }
+
       return _parseCharge(
-        _decode(response.body),
+        decoded,
         fallbackReference: reference,
         fallbackAmount: amount,
         offline: false,
@@ -92,36 +117,58 @@ class MiomiPayService {
     }
   }
 
-  Future<MiomiPayStatus> checkStatus(String reference) async {
-    try {
-      final response = await _client
-          .get(
-            Uri.parse('$_baseUrl/v1/payments/${Uri.encodeComponent(reference)}'),
-            headers: _headers,
-          )
-          .timeout(_timeout);
+  /// Cek status pembayaran berdasarkan snap token.
+  ///
+  /// Endpoint ini publik (tidak memerlukan API key).
+  Future<MiomiPayCharge?> fetchCharge(String snapToken) async {
+    final response = await _client
+        .get(
+          Uri.parse('$_baseUrl/transactions/$snapToken/status'),
+          headers: const {'Accept': 'application/json'},
+        )
+        .timeout(_timeout);
 
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw MiomiPayException(_errorFromResponse(response));
-      }
-
-      final data = _unwrap(_decode(response.body));
-      return MiomiPayStatus.fromString(
-        (data['status'] ?? data['transaction_status'])?.toString(),
-      );
-    } catch (error) {
-      if (error is MiomiPayException) rethrow;
-      throw MiomiPayException('Gagal mengecek status pembayaran: $error');
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw MiomiPayException(_errorFromResponse(response));
     }
+
+    final decoded = _decode(response.body);
+    if (decoded['success'] == false) return null;
+
+    return MiomiPayCharge(
+      reference: snapToken,
+      transactionId: snapToken,
+      amount: 0,
+      status: _statusFromMap(decoded),
+      qrString: snapToken,
+      sandbox: (decoded['environment']?.toString().toLowerCase() ?? '') !=
+          'production',
+    );
   }
 
-  Future<MiomiPayStatus> simulatePayment(String reference) async {
+  /// Mengambil status saja.
+  Future<MiomiPayStatus> checkStatus(String snapToken) async {
+    final response = await _client
+        .get(
+          Uri.parse('$_baseUrl/transactions/$snapToken/status'),
+          headers: const {'Accept': 'application/json'},
+        )
+        .timeout(_timeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw MiomiPayException(_errorFromResponse(response));
+    }
+
+    final decoded = _decode(response.body);
+    return _statusFromMap(decoded);
+  }
+
+  /// Simulasi pembayaran sukses (hanya berfungsi pada lingkungan sandbox).
+  Future<MiomiPayStatus> simulatePayment(String snapToken) async {
     final response = await _client
         .post(
-          Uri.parse(
-            '$_baseUrl/v1/payments/${Uri.encodeComponent(reference)}/pay',
-          ),
-          headers: _headers,
+          Uri.parse('$_baseUrl/sandbox/$snapToken/simulate-pay'),
+          headers: _authHeaders,
           body: '{}',
         )
         .timeout(_timeout);
@@ -130,21 +177,52 @@ class MiomiPayService {
       throw MiomiPayException(_errorFromResponse(response));
     }
 
-    final data = _unwrap(_decode(response.body));
-    return MiomiPayStatus.fromString(data['status']?.toString());
+    // Konfirmasi ulang lewat endpoint status agar sumber kebenaran tetap API.
+    try {
+      return await checkStatus(snapToken);
+    } catch (_) {
+      return MiomiPayStatus.paid;
+    }
   }
 
-  /// Mengecek apakah mock server / API MiomiPay dapat dihubungi.
+  /// Simulasi tagihan kedaluwarsa (sandbox).
+  Future<MiomiPayStatus> simulateExpire(String snapToken) async {
+    final response = await _client
+        .post(
+          Uri.parse('$_baseUrl/sandbox/$snapToken/simulate-expire'),
+          headers: _authHeaders,
+          body: '{}',
+        )
+        .timeout(_timeout);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw MiomiPayException(_errorFromResponse(response));
+    }
+    return MiomiPayStatus.expired;
+  }
+
+  /// MiomiPay tidak menyediakan endpoint pembatalan publik.
+  /// Pembatalan cukup dilakukan di sisi aplikasi (status pesanan).
+  Future<void> cancelCharge(String reference) async {
+    // intentionally no-op
+  }
+
+  /// Mengecek apakah API MiomiPay dapat dijangkau.
+  ///
+  /// Gateway tidak menyediakan `/health`, jadi respons HTTP apa pun
+  /// (termasuk 401/404) dianggap sebagai "terhubung".
   Future<bool> ping() async {
     try {
-      final response = await _client
-          .get(Uri.parse('$_baseUrl/health'))
-          .timeout(const Duration(seconds: 4));
-      return response.statusCode >= 200 && response.statusCode < 300;
+      await _client
+          .get(Uri.parse(_baseUrl), headers: const {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 6));
+      return true;
     } catch (_) {
       return false;
     }
   }
+
+  // ── Parsing ────────────────────────────────────────────────────────────────
 
   MiomiPayCharge _parseCharge(
     Map<String, dynamic> json, {
@@ -153,45 +231,46 @@ class MiomiPayService {
     required bool offline,
   }) {
     final data = _unwrap(json);
-    final status = MiomiPayStatus.fromString(
-      (data['status'] ?? json['status'])?.toString(),
-    );
-    final qr =
-        (data['qr_string'] ??
+
+    final snapToken = (data['snap_token'] ??
+            data['snapToken'] ??
+            data['reference'] ??
+            fallbackReference)
+        .toString();
+    final invoice = (data['reference'] ?? data['invoice_number'])?.toString();
+    final status = _statusFromMap(data);
+    final qr = (data['qr_string'] ??
+                data['qrString'] ??
                 data['qr_content'] ??
-                data['qrCode'] ??
                 data['qr_url'] ??
-                data['qr_code_url'])
-            ?.toString() ??
-        'MIOMIPAY|$fallbackReference|$fallbackAmount';
-    final reference =
-        (data['reference_id'] ??
-                data['referenceId'] ??
-                data['reference'] ??
-                fallbackReference)
+                '')
             .toString();
-    final transactionId =
-        (data['transaction_id'] ??
-                data['transactionId'] ??
-                data['id'] ??
-                reference)
-            .toString();
-    final amount = _toInt(data['amount']) ?? fallbackAmount;
-    final expiresRaw =
-        data['expires_at'] ?? data['expiresAt'] ?? data['expiry_time'];
-    final environment = (data['environment'] ?? data['mode'])
-        ?.toString()
-        .toLowerCase();
+    final amount = _toInt(data['final_amount']) ??
+        _toInt(data['amount']) ??
+        fallbackAmount;
+    final expiresRaw = data['expired_at'] ?? data['expires_at'];
+    final environment = (data['environment'] ?? '').toString().toLowerCase();
 
     return MiomiPayCharge(
-      reference: reference,
-      transactionId: transactionId,
+      reference: snapToken,
+      transactionId: invoice ?? snapToken,
+      invoiceReference: invoice,
       amount: amount,
       status: status,
-      qrString: qr,
+      qrString: qr.isEmpty ? snapToken : qr,
+      qrImageUrl: data['qr_image_url']?.toString(),
+      checkoutUrl: data['checkout_url']?.toString(),
       expiresAt: expiresRaw is String ? DateTime.tryParse(expiresRaw) : null,
-      sandbox: environment == 'sandbox' || Config.miomiPaySandbox,
+      sandbox: environment != 'production' && environment != 'live',
       offlineSimulation: offline,
+    );
+  }
+
+  MiomiPayStatus _statusFromMap(Map<String, dynamic> data) {
+    if (data['is_paid'] == true) return MiomiPayStatus.paid;
+    if (data['is_expired'] == true) return MiomiPayStatus.expired;
+    return MiomiPayStatus.fromString(
+      (data['status'] ?? data['transaction_status'])?.toString(),
     );
   }
 
@@ -200,8 +279,9 @@ class MiomiPayService {
     required int amount,
   }) {
     return MiomiPayCharge(
-      reference: reference,
+      reference: 'OFFLINE-$reference',
       transactionId: 'SIM-$reference',
+      invoiceReference: 'SIM-$reference',
       amount: amount,
       status: MiomiPayStatus.pending,
       qrString: 'MIOMIPAY-SANDBOX\n$reference\nRp $amount',
@@ -230,14 +310,19 @@ class MiomiPayService {
     try {
       final decoded = jsonDecode(response.body);
       if (decoded is Map) {
-        final message =
-            decoded['message'] ?? decoded['error'] ?? decoded['detail'];
-        if (message != null) {
-          return 'MiomiPay: $message';
+        final message = decoded['message'];
+        final errors = decoded['errors'];
+        if (errors is Map && errors.isNotEmpty) {
+          final first = errors.values.first;
+          final detail = first is List && first.isNotEmpty
+              ? first.first.toString()
+              : first.toString();
+          return 'MiomiPay: $detail';
         }
+        if (message != null) return 'MiomiPay: $message';
       }
     } catch (_) {
-      // Abaikan body yang bukan JSON.
+      // Body bukan JSON.
     }
     return 'MiomiPay mengembalikan HTTP ${response.statusCode}.';
   }

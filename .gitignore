@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Kredensial lokal (JANGAN di-commit)
+dart_defines.json
+dart_defines.*.json
+!dart_defines.example.json
+.env
+.env.*

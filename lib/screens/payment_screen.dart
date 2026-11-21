@@ -28,6 +28,7 @@ class _PaymentScreenState extends State<PaymentScreen>
   bool _loadingCharge = true;
   bool _polling = false;
   bool _simulating = false;
+  bool? _serverOnline; // null = belum dicek
   Timer? _pollTimer;
   int _elapsedSeconds = 0;
   Timer? _clockTimer;
@@ -41,6 +42,7 @@ class _PaymentScreenState extends State<PaymentScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
+    _checkServer();
     _createCharge();
   }
 
@@ -50,6 +52,13 @@ class _PaymentScreenState extends State<PaymentScreen>
     _clockTimer?.cancel();
     _pulseCtrl.dispose();
     super.dispose();
+  }
+
+  /// Cek apakah API/mock server MiomiPay dapat dihubungi.
+  Future<void> _checkServer() async {
+    final online = await context.read<AppProvider>().miomiPayService.ping();
+    if (!mounted) return;
+    setState(() => _serverOnline = online);
   }
 
   Future<void> _createCharge() async {
@@ -66,7 +75,7 @@ class _PaymentScreenState extends State<PaymentScreen>
       await provider.orderService.attachPayment(
         orderId: widget.order.id,
         reference: charge.reference,
-        isSimulated: charge.offlineSimulation,
+        isSimulated: charge.offlineSimulation || Config.miomiPaySandbox,
       );
 
       setState(() {
@@ -111,7 +120,12 @@ class _PaymentScreenState extends State<PaymentScreen>
       if (!mounted) return;
       setState(() => _charge = _charge!.copyWith(status: status));
 
-      if (_charge!.isPaid) _onPaymentSuccess();
+      if (_charge!.isPaid) {
+        _onPaymentSuccess();
+      } else if (status == MiomiPayStatus.expired ||
+          status == MiomiPayStatus.failed) {
+        _pollTimer?.cancel();
+      }
     } catch (_) {
       // abaikan error polling
     } finally {
@@ -125,26 +139,28 @@ class _PaymentScreenState extends State<PaymentScreen>
 
     try {
       final provider = context.read<AppProvider>();
-      MiomiPayStatus status;
-
-      if (_charge!.offlineSimulation) {
-        // Offline: langsung tandai lunas
-        status = MiomiPayStatus.paid;
-      } else {
-        // Panggil endpoint simulasi mock server
-        status = await provider.miomiPayService.simulatePayment(
-          _charge!.reference,
-        );
-      }
+      final status = _charge!.offlineSimulation
+          ? MiomiPayStatus.paid
+          : await provider.miomiPayService.simulatePayment(_charge!.reference);
 
       if (!mounted) return;
       setState(() => _charge = _charge!.copyWith(status: status));
       if (_charge!.isPaid) _onPaymentSuccess();
     } catch (e) {
-      // Fallback ke simulasi lokal jika server tidak tersedia
-      if (mounted) {
-        setState(() => _charge = _charge!.copyWith(status: MiomiPayStatus.paid));
+      if (!mounted) return;
+      if (Config.miomiPaySandbox) {
+        // Sandbox: jangan blokir demo bila endpoint simulasi bermasalah.
+        setState(
+          () => _charge = _charge!.copyWith(status: MiomiPayStatus.paid),
+        );
         _onPaymentSuccess();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memproses pembayaran: $e'),
+            backgroundColor: PosColors.danger,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _simulating = false);
@@ -156,11 +172,14 @@ class _PaymentScreenState extends State<PaymentScreen>
     _clockTimer?.cancel();
 
     final provider = context.read<AppProvider>();
+    // Pembayaran dianggap simulasi bila server offline ATAU gateway masih sandbox.
+    final isSimulated = _charge!.offlineSimulation || Config.miomiPaySandbox;
+
     try {
       await provider.orderService.markPaid(
         orderId: widget.order.id,
         reference: _charge!.reference,
-        isSimulated: _charge?.offlineSimulation,
+        isSimulated: isSimulated,
       );
     } catch (_) {}
 
@@ -170,7 +189,7 @@ class _PaymentScreenState extends State<PaymentScreen>
       status: OrderStatus.paid,
       paidAt: DateTime.now(),
       paymentReference: _charge!.reference,
-      isSimulatedPayment: _charge!.offlineSimulation,
+      isSimulatedPayment: isSimulated,
     );
 
     provider.clearCart();
@@ -182,7 +201,8 @@ class _PaymentScreenState extends State<PaymentScreen>
   }
 
   Future<void> _cancelOrder() async {
-    final orderService = context.read<AppProvider>().orderService;
+    final provider = context.read<AppProvider>();
+    final orderService = provider.orderService;
     final nav = Navigator.of(context);
 
     final ok = await showDialog<bool>(
@@ -212,6 +232,10 @@ class _PaymentScreenState extends State<PaymentScreen>
       try {
         await orderService.markCancelled(widget.order.id);
       } catch (_) {}
+      // Kabari MiomiPay agar tagihan tidak menggantung.
+      if (_charge != null && !_charge!.offlineSimulation) {
+        await provider.miomiPayService.cancelCharge(_charge!.reference);
+      }
       if (mounted) nav.pop();
     }
   }
@@ -241,12 +265,26 @@ class _PaymentScreenState extends State<PaymentScreen>
             )
           : _charge!.isPaid
           ? const _PaidView()
+          : _charge!.status == MiomiPayStatus.expired ||
+                _charge!.status == MiomiPayStatus.failed
+          ? _FinishedView(
+              status: _charge!.status,
+              onRetry: () {
+                setState(() {
+                  _loadingCharge = true;
+                  _error = null;
+                });
+                _createCharge();
+              },
+              onCancel: _cancelOrder,
+            )
           : _QrisView(
               charge: _charge!,
               order: widget.order,
               elapsedSeconds: _elapsedSeconds,
               sandboxMode: Config.miomiPaySandbox,
               simulating: _simulating,
+              serverOnline: _serverOnline,
               pulseCtrl: _pulseCtrl,
               onSimulate: _simulatePayment,
               onCancel: _cancelOrder,
@@ -348,6 +386,74 @@ class _PaidView extends StatelessWidget {
   }
 }
 
+class _FinishedView extends StatelessWidget {
+  const _FinishedView({
+    required this.status,
+    required this.onRetry,
+    required this.onCancel,
+  });
+
+  final MiomiPayStatus status;
+  final VoidCallback onRetry;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final expired = status == MiomiPayStatus.expired;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              expired
+                  ? Icons.timer_off_outlined
+                  : Icons.error_outline_rounded,
+              size: 72,
+              color: PosColors.danger,
+            ),
+            const SizedBox(height: 18),
+            Text(
+              expired ? 'Tagihan Kedaluwarsa' : 'Pembayaran Gagal',
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: PosColors.text,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              expired
+                  ? 'Waktu pembayaran habis. Buat tagihan baru untuk melanjutkan.'
+                  : 'Transaksi tidak dapat diproses. Silakan coba lagi.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: PosColors.textMuted,
+                fontSize: 13.5,
+              ),
+            ),
+            const SizedBox(height: 26),
+            PosButton(
+              label: 'Buat Tagihan Baru',
+              icon: Icons.refresh_rounded,
+              onPressed: onRetry,
+            ),
+            const SizedBox(height: 10),
+            PosButton(
+              label: 'Batalkan Pesanan',
+              icon: Icons.close_rounded,
+              outlined: true,
+              danger: true,
+              onPressed: onCancel,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _QrisView extends StatelessWidget {
   const _QrisView({
     required this.charge,
@@ -355,6 +461,7 @@ class _QrisView extends StatelessWidget {
     required this.elapsedSeconds,
     required this.sandboxMode,
     required this.simulating,
+    required this.serverOnline,
     required this.pulseCtrl,
     required this.onSimulate,
     required this.onCancel,
@@ -365,6 +472,7 @@ class _QrisView extends StatelessWidget {
   final int elapsedSeconds;
   final bool sandboxMode;
   final bool simulating;
+  final bool? serverOnline;
   final AnimationController pulseCtrl;
   final VoidCallback onSimulate;
   final VoidCallback onCancel;
@@ -408,6 +516,50 @@ class _QrisView extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 12,
                   color: PosColors.textMuted,
+                ),
+              ),
+              const SizedBox(height: 10),
+              // Status koneksi ke API MiomiPay
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: serverOnline == true
+                      ? PosColors.successSoft
+                      : PosColors.warningSoft,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: serverOnline == true
+                            ? PosColors.success
+                            : PosColors.warning,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      serverOnline == null
+                          ? 'Memeriksa koneksi…'
+                          : serverOnline == true
+                          ? 'MiomiPay terhubung'
+                          : 'Mode offline (simulasi lokal)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: serverOnline == true
+                            ? PosColors.success
+                            : PosColors.warning,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -565,10 +717,25 @@ class _QrisView extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'API MiomiPay belum dikonfigurasi. Gunakan tombol simulasi untuk mendemokan alur pembayaran.',
-                  style: TextStyle(fontSize: 12, color: PosColors.warning),
+                Text(
+                  Config.miomiPayMissingApiKey
+                      ? 'API key MiomiPay belum diisi, jadi aplikasi memakai simulasi lokal. '
+                            'Jalankan dengan --dart-define-from-file=dart_defines.sandbox.json.'
+                      : 'Transaksi memakai lingkungan sandbox MiomiPay. '
+                            'Gunakan tombol di bawah untuk mensimulasikan pembayaran berhasil.',
+                  style: const TextStyle(fontSize: 12, color: PosColors.warning),
                 ),
+                if (charge.invoiceReference != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Invoice: ${charge.invoiceReference}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: PosColors.warning,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 SizedBox(
                   width: double.infinity,

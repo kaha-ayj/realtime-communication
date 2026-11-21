@@ -2,8 +2,8 @@ import 'package:flutter/foundation.dart';
 
 /// Konfigurasi global aplikasi.
 ///
-/// Nilai yang dapat diubah saat build:
-/// `flutter run --dart-define=MIOMIPAY_BASE_URL=http://192.168.1.10:4000`
+/// Nilai dapat diubah saat build:
+/// `flutter run --dart-define-from-file=dart_defines.sandbox.json`
 class Config {
   Config._();
 
@@ -22,34 +22,54 @@ class Config {
   // ---------------------------------------------------------------------------
   // MiomiPay
   // ---------------------------------------------------------------------------
-  /// Base URL API MiomiPay. Secara default mengarah ke mock server lokal
-  /// (`server/miomipay-mock.js`) supaya alur pembayaran bisa didemokan.
+  /// Base URL API MiomiPay.
+  ///
+  /// Default mengarah ke gateway asli MiomiPay. Untuk memakai mock server lokal:
+  /// `--dart-define=MIOMIPAY_BASE_URL=http://localhost:4000/api/v1`
   static const String _miomiPayBaseUrlOverride = String.fromEnvironment(
     'MIOMIPAY_BASE_URL',
+    defaultValue: 'https://pg.miomidev.com/api/v1',
   );
 
+  /// API key MiomiPay.
+  ///
+  /// **Jangan** menaruh nilai asli di berkas ini. Isi lewat
+  /// `--dart-define` atau `--dart-define-from-file`.
+  ///
+  /// - Sandbox: kunci berawalan `MP-SB-`
+  /// - Live   : kunci berawalan `MP-LIVE-`
   static const String miomiPayApiKey = String.fromEnvironment(
     'MIOMIPAY_API_KEY',
-    defaultValue: 'miomipay_sandbox_key',
   );
 
+  /// ID merchant (opsional, hanya untuk metadata/log).
   static const String miomiPayMerchantId = String.fromEnvironment(
     'MIOMIPAY_MERCHANT_ID',
     defaultValue: 'POS-DEMO-001',
   );
 
-  /// `true` menampilkan tombol simulasi pembayaran di layar QRIS.
+  /// URL callback/webhook yang dikirim saat membuat tagihan.
+  static const String miomiPayCallbackUrl = String.fromEnvironment(
+    'MIOMIPAY_CALLBACK_URL',
+  );
+
+  /// `true` mengaktifkan tombol simulasi pembayaran di layar QRIS.
+  ///
+  /// Gunakan `false` untuk transaksi uang nyata.
   static const bool miomiPaySandbox = bool.fromEnvironment(
     'MIOMIPAY_SANDBOX',
     defaultValue: true,
   );
 
   static String get miomiPayBaseUrl {
-    if (_miomiPayBaseUrlOverride.isNotEmpty) {
-      return _miomiPayBaseUrlOverride;
-    }
-    return 'http://$_host:4000';
+    final value = _miomiPayBaseUrlOverride;
+    return value.endsWith('/')
+        ? value.substring(0, value.length - 1)
+        : value;
   }
+
+  /// True bila API key belum diisi.
+  static bool get miomiPayMissingApiKey => miomiPayApiKey.trim().isEmpty;
 
   // ---------------------------------------------------------------------------
   // Server demo realtime (opsional, dari modul sebelumnya)
