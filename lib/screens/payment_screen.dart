@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -27,11 +28,13 @@ class _PaymentScreenState extends State<PaymentScreen>
   String? _error;
   bool _loadingCharge = true;
   bool _polling = false;
-  bool _simulating = false;
-  bool? _serverOnline; // null = belum dicek
+  bool? _serverOnline;
   Timer? _pollTimer;
   int _elapsedSeconds = 0;
   Timer? _clockTimer;
+
+  /// True setelah kasir menyalin link gambar QR ke clipboard.
+  bool _linkCopied = false;
 
   late final AnimationController _pulseCtrl;
 
@@ -54,7 +57,6 @@ class _PaymentScreenState extends State<PaymentScreen>
     super.dispose();
   }
 
-  /// Cek apakah API/mock server MiomiPay dapat dihubungi.
   Future<void> _checkServer() async {
     final online = await context.read<AppProvider>().miomiPayService.ping();
     if (!mounted) return;
@@ -108,7 +110,7 @@ class _PaymentScreenState extends State<PaymentScreen>
 
   Future<void> _checkStatus() async {
     if (_charge == null || _polling) return;
-    if (_charge!.offlineSimulation) return; // offline mode pakai tombol manual
+    if (_charge!.offlineSimulation) return;
     _polling = true;
 
     try {
@@ -133,49 +135,11 @@ class _PaymentScreenState extends State<PaymentScreen>
     }
   }
 
-  Future<void> _simulatePayment() async {
-    if (_charge == null || _simulating) return;
-    setState(() => _simulating = true);
-
-    try {
-      final provider = context.read<AppProvider>();
-      final status = _charge!.offlineSimulation
-          ? MiomiPayStatus.paid
-          : await provider.miomiPayService.simulatePayment(
-              _charge!.reference,
-              snapToken: _charge!.snapToken,
-            );
-
-      if (!mounted) return;
-      setState(() => _charge = _charge!.copyWith(status: status));
-      if (_charge!.isPaid) _onPaymentSuccess();
-    } catch (e) {
-      if (!mounted) return;
-      if (Config.miomiPaySandbox) {
-        // Sandbox: jangan blokir demo bila endpoint simulasi bermasalah.
-        setState(
-          () => _charge = _charge!.copyWith(status: MiomiPayStatus.paid),
-        );
-        _onPaymentSuccess();
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Gagal memproses pembayaran: $e'),
-            backgroundColor: PosColors.danger,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _simulating = false);
-    }
-  }
-
   Future<void> _onPaymentSuccess() async {
     _pollTimer?.cancel();
     _clockTimer?.cancel();
 
     final provider = context.read<AppProvider>();
-    // Pembayaran dianggap simulasi bila server offline ATAU gateway masih sandbox.
     final isSimulated = _charge!.offlineSimulation || Config.miomiPaySandbox;
 
     try {
@@ -235,12 +199,50 @@ class _PaymentScreenState extends State<PaymentScreen>
       try {
         await orderService.markCancelled(widget.order.id);
       } catch (_) {}
-      // Kabari MiomiPay agar tagihan tidak menggantung.
       if (_charge != null && !_charge!.offlineSimulation) {
         await provider.miomiPayService.cancelCharge(_charge!.reference);
       }
       if (mounted) nav.pop();
     }
+  }
+
+  /// Menyalin link simulasi pembayaran MiomiPay ke clipboard.
+  ///
+  /// Prioritas: checkout_url → qr_image_url → snap_token → reference.
+  /// Semua format ini diterima MiomiPay sebagai input simulasi pembayaran.
+  Future<void> _copyQrLink() async {
+    if (_charge == null) return;
+
+    final link = _charge!.checkoutUrl ??
+        _charge!.qrImageUrl ??
+        _charge!.snapToken ??
+        _charge!.reference;
+
+    await Clipboard.setData(ClipboardData(text: link));
+
+    if (!mounted) return;
+    setState(() => _linkCopied = true);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Link disalin! Paste di MiomiPay untuk menyelesaikan pembayaran.',
+                style: TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: PosColors.success,
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   @override
@@ -285,16 +287,17 @@ class _PaymentScreenState extends State<PaymentScreen>
               charge: _charge!,
               order: widget.order,
               elapsedSeconds: _elapsedSeconds,
-              sandboxMode: Config.miomiPaySandbox,
-              simulating: _simulating,
               serverOnline: _serverOnline,
               pulseCtrl: _pulseCtrl,
-              onSimulate: _simulatePayment,
+              linkCopied: _linkCopied,
               onCancel: _cancelOrder,
+              onCopyQrLink: _copyQrLink,
             ),
     );
   }
 }
+
+// ── Loading ──────────────────────────────────────────────────────────────────
 
 class _LoadingView extends StatelessWidget {
   const _LoadingView();
@@ -316,6 +319,8 @@ class _LoadingView extends StatelessWidget {
     );
   }
 }
+
+// ── Error ────────────────────────────────────────────────────────────────────
 
 class _ErrorView extends StatelessWidget {
   const _ErrorView({required this.error, required this.onRetry});
@@ -347,13 +352,19 @@ class _ErrorView extends StatelessWidget {
               style: const TextStyle(color: PosColors.textMuted, fontSize: 13),
             ),
             const SizedBox(height: 24),
-            PosButton(label: 'Coba Lagi', icon: Icons.refresh_rounded, onPressed: onRetry),
+            PosButton(
+              label: 'Coba Lagi',
+              icon: Icons.refresh_rounded,
+              onPressed: onRetry,
+            ),
           ],
         ),
       ),
     );
   }
 }
+
+// ── Paid ─────────────────────────────────────────────────────────────────────
 
 class _PaidView extends StatelessWidget {
   const _PaidView();
@@ -364,11 +375,7 @@ class _PaidView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.check_circle_rounded,
-            size: 80,
-            color: PosColors.success,
-          ),
+          Icon(Icons.check_circle_rounded, size: 80, color: PosColors.success),
           SizedBox(height: 20),
           Text(
             'Pembayaran Berhasil!',
@@ -388,6 +395,8 @@ class _PaidView extends StatelessWidget {
     );
   }
 }
+
+// ── Finished (expired / failed) ───────────────────────────────────────────────
 
 class _FinishedView extends StatelessWidget {
   const _FinishedView({
@@ -410,9 +419,7 @@ class _FinishedView extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              expired
-                  ? Icons.timer_off_outlined
-                  : Icons.error_outline_rounded,
+              expired ? Icons.timer_off_outlined : Icons.error_outline_rounded,
               size: 72,
               color: PosColors.danger,
             ),
@@ -431,10 +438,7 @@ class _FinishedView extends StatelessWidget {
                   ? 'Waktu pembayaran habis. Buat tagihan baru untuk melanjutkan.'
                   : 'Transaksi tidak dapat diproses. Silakan coba lagi.',
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: PosColors.textMuted,
-                fontSize: 13.5,
-              ),
+              style: const TextStyle(color: PosColors.textMuted, fontSize: 13.5),
             ),
             const SizedBox(height: 26),
             PosButton(
@@ -457,28 +461,28 @@ class _FinishedView extends StatelessWidget {
   }
 }
 
+// ── QRIS View ─────────────────────────────────────────────────────────────────
+
 class _QrisView extends StatelessWidget {
   const _QrisView({
     required this.charge,
     required this.order,
     required this.elapsedSeconds,
-    required this.sandboxMode,
-    required this.simulating,
     required this.serverOnline,
     required this.pulseCtrl,
-    required this.onSimulate,
+    required this.linkCopied,
     required this.onCancel,
+    required this.onCopyQrLink,
   });
 
   final MiomiPayCharge charge;
   final PosOrder order;
   final int elapsedSeconds;
-  final bool sandboxMode;
-  final bool simulating;
   final bool? serverOnline;
   final AnimationController pulseCtrl;
-  final VoidCallback onSimulate;
+  final bool linkCopied;
   final VoidCallback onCancel;
+  final VoidCallback onCopyQrLink;
 
   String get _elapsed {
     final m = elapsedSeconds ~/ 60;
@@ -491,7 +495,7 @@ class _QrisView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
       children: [
-        // Header nominal
+        // ── Header nominal ────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
@@ -516,18 +520,12 @@ class _QrisView extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Kode: ${order.code}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: PosColors.textMuted,
-                ),
+                style: const TextStyle(fontSize: 12, color: PosColors.textMuted),
               ),
               const SizedBox(height: 10),
-              // Status koneksi ke API MiomiPay
+              // Badge status koneksi MiomiPay
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: serverOnline == true
                       ? PosColors.successSoft
@@ -570,7 +568,7 @@ class _QrisView extends StatelessWidget {
         ),
         const SizedBox(height: 20),
 
-        // QR Code
+        // ── Card QR + tombol salin ────────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
@@ -580,6 +578,7 @@ class _QrisView extends StatelessWidget {
           ),
           child: Column(
             children: [
+              // Label judul
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -621,6 +620,7 @@ class _QrisView extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
+              // Gambar QR
               AnimatedBuilder(
                 animation: pulseCtrl,
                 builder: (context, child) => Transform.scale(
@@ -642,6 +642,8 @@ class _QrisView extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
+
+              // Timer menunggu
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -660,12 +662,30 @@ class _QrisView extends StatelessWidget {
                   ),
                 ],
               ),
+
+              // Box link simulasi — selalu tampil jika bukan mode offline
+              if (!charge.offlineSimulation) ...[
+                const SizedBox(height: 16),
+                const Divider(height: 1),
+                const SizedBox(height: 16),
+                _CopyLinkRow(
+                  charge: charge,
+                  linkCopied: linkCopied,
+                  onCopyQrLink: onCopyQrLink,
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 16),
 
-        // Info
+        // ── Banner setelah link disalin ───────────────────────────────────
+        if (linkCopied) ...[
+          _LinkCopiedBanner(elapsedSeconds: elapsedSeconds),
+          const SizedBox(height: 16),
+        ],
+
+        // ── Langkah panduan ───────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -676,99 +696,22 @@ class _QrisView extends StatelessWidget {
             children: [
               _InfoStep(
                 step: '1',
-                text: 'Buka aplikasi e-wallet atau mobile banking Anda',
+                text: 'Scan QR di atas, ATAU salin link simulasi dan paste di halaman MiomiPay',
               ),
-              _InfoStep(step: '2', text: 'Pilih menu Scan QR / QRIS'),
-              _InfoStep(step: '3', text: 'Arahkan kamera ke kode QR di atas'),
               _InfoStep(
-                step: '4',
-                text: 'Konfirmasi nominal dan selesaikan pembayaran',
+                step: '2',
+                text: 'MiomiPay memproses pembayaran setelah link di-paste',
+              ),
+              _InfoStep(
+                step: '3',
+                text: 'Struk muncul otomatis setelah pembayaran diterima',
               ),
             ],
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
 
-        // Sandbox / simulasi
-        if (sandboxMode)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: PosColors.warningSoft,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: PosColors.warning.withAlpha(80)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Row(
-                  children: [
-                    Icon(
-                      Icons.science_rounded,
-                      size: 16,
-                      color: PosColors.warning,
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      'Mode Sandbox / Simulasi',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: PosColors.warning,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  Config.miomiPayMissingApiKey
-                      ? 'API key MiomiPay belum diisi, jadi aplikasi memakai simulasi lokal. '
-                            'Jalankan dengan --dart-define-from-file=dart_defines.sandbox.json.'
-                      : 'Transaksi memakai lingkungan sandbox MiomiPay. '
-                            'Gunakan tombol di bawah untuk mensimulasikan pembayaran berhasil.',
-                  style: const TextStyle(fontSize: 12, color: PosColors.warning),
-                ),
-                if (charge.invoiceReference != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Invoice: ${charge.invoiceReference}',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: PosColors.warning,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: simulating ? null : onSimulate,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: PosColors.warning,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(0, 48),
-                    ),
-                    icon: simulating
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.flash_on_rounded, size: 18),
-                    label: Text(
-                      simulating ? 'Memproses…' : 'Simulasi Pembayaran Berhasil',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 16),
-
+        // ── Tombol batal ──────────────────────────────────────────────────
         OutlinedButton.icon(
           onPressed: onCancel,
           style: OutlinedButton.styleFrom(
@@ -783,6 +726,198 @@ class _QrisView extends StatelessWidget {
     );
   }
 }
+
+// ── Box link simulasi (di dalam card QR) ─────────────────────────────────────
+
+class _CopyLinkRow extends StatelessWidget {
+  const _CopyLinkRow({
+    required this.charge,
+    required this.linkCopied,
+    required this.onCopyQrLink,
+  });
+
+  final MiomiPayCharge charge;
+  final bool linkCopied;
+  final VoidCallback onCopyQrLink;
+
+  /// Nilai yang akan disalin — prioritas checkout_url → qr_image_url →
+  /// snap_token → reference. Semua format diterima MiomiPay untuk simulasi.
+  String get _link =>
+      charge.checkoutUrl ??
+      charge.qrImageUrl ??
+      charge.snapToken ??
+      charge.reference;
+
+  /// Label jenis nilai yang ditampilkan.
+  String get _linkLabel {
+    if (charge.checkoutUrl != null) return 'Checkout URL';
+    if (charge.qrImageUrl != null) return 'QR Image URL';
+    if (charge.snapToken != null) return 'Snap Token';
+    return 'Reference';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Label
+        Row(
+          children: [
+            Icon(
+              linkCopied ? Icons.check_circle_rounded : Icons.content_paste_rounded,
+              size: 14,
+              color: linkCopied ? PosColors.success : PosColors.textMuted,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              linkCopied
+                  ? 'Link simulasi sudah disalin'
+                  : 'Link simulasi MiomiPay ($_linkLabel)',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: linkCopied ? PosColors.success : PosColors.textMuted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // Box link + tombol salin
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F5F5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: linkCopied
+                        ? PosColors.success.withAlpha(120)
+                        : PosColors.border,
+                  ),
+                ),
+                child: Text(
+                  _link,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: PosColors.text,
+                    fontFamily: 'monospace',
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              height: 40,
+              child: FilledButton.icon(
+                onPressed: onCopyQrLink,
+                style: FilledButton.styleFrom(
+                  backgroundColor:
+                      linkCopied ? PosColors.success : PosColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: Icon(
+                  linkCopied ? Icons.check_rounded : Icons.copy_rounded,
+                  size: 15,
+                ),
+                label: Text(
+                  linkCopied ? 'Tersalin' : 'Salin',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          linkCopied
+              ? 'Paste link di halaman simulasi MiomiPay untuk menyelesaikan pembayaran.'
+              : 'Salin lalu paste di halaman simulasi MiomiPay.',
+          style: TextStyle(
+            fontSize: 11,
+            color: linkCopied
+                ? PosColors.success.withAlpha(180)
+                : PosColors.textMuted,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Banner setelah link disalin ───────────────────────────────────────────────
+
+class _LinkCopiedBanner extends StatelessWidget {
+  const _LinkCopiedBanner({required this.elapsedSeconds});
+  final int elapsedSeconds;
+
+  String get _elapsed {
+    final m = elapsedSeconds ~/ 60;
+    final s = elapsedSeconds % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF6FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: PosColors.primary.withAlpha(60)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: PosColors.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Menunggu pembayaran di MiomiPay…',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: PosColors.primary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Struk otomatis muncul setelah transaksi diterima. ($_elapsed)',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: PosColors.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Info step ─────────────────────────────────────────────────────────────────
 
 class _InfoStep extends StatelessWidget {
   const _InfoStep({required this.step, required this.text});
