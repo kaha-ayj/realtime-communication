@@ -1,0 +1,34 @@
+﻿{
+    "flutter":  {
+                    "platforms":  {
+                                      "android":  {
+                                                      "default":  {
+                                                                      "projectId":  "flutter-firebase-app-kaha",
+                                                                      "appId":  "1:369127407818:android:72e036a21be47c131cf433",
+                                                                      "fileOutput":  "android/app/google-services.json"
+                                                                  }
+                                                  },
+                                      "dart":  {
+                                                   "lib/firebase_options.dart":  {
+                                                                                     "projectId":  "flutter-firebase-app-kaha",
+                                                                                     "configurations":  {
+                                                                                                            "android":  "1:369127407818:android:72e036a21be47c131cf433",
+                                                                                                            "ios":  "1:369127407818:ios:92eba2a67d6964161cf433",
+                                                                                                            "macos":  "1:369127407818:ios:92eba2a67d6964161cf433",
+                                                                                                            "web":  "1:369127407818:web:352690f26105826f1cf433",
+                                                                                                            "windows":  "1:369127407818:web:18a42ae1c4d678bd1cf433"
+                                                                                                        }
+                                                                                 }
+                                               }
+                                  }
+                },
+    "auth":  {
+                 "providers":  {
+                                   "emailPassword":  true
+                               }
+             },
+    "firestore":  {
+                      "rules":  "firestore.rules",
+                      "database":  "default"
+                  }
+}

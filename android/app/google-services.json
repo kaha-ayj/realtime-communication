@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "369127407818",
+    "project_id": "flutter-firebase-app-kaha",
+    "storage_bucket": "flutter-firebase-app-kaha.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:369127407818:android:72e036a21be47c131cf433",
+        "android_client_info": {
+          "package_name": "com.example.realtime_communication"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBe76GicaQ1ZdrXYaL6L50zkoE5Fuzo0wg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

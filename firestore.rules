@@ -1,0 +1,36 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Profil pengguna menyimpan role (admin / kasir).
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if false; // dikelola oleh admin melalui Firebase Console
+    }
+
+    // Menu hanya bisa diubah oleh admin, dapat dibaca semua user yang login.
+    match /menus/{menuId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Kasir membuat pesanan miliknya sendiri. Admin dapat membaca semuanya.
+    match /orders/{orderId} {
+      allow read: if signedIn();
+      allow create: if signedIn() &&
+        request.resource.data.cashierId == request.auth.uid;
+      allow update: if signedIn() &&
+        (resource.data.cashierId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+  }
+}
