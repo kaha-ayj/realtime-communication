@@ -1,10 +1,12 @@
 {
   "name": "miomipay-mock-server",
   "version": "1.0.0",
-  "description": "Mock server for MiomiPay QRIS payment simulation",
+  "description": "Mock server dan penerima webhook MiomiPay",
   "main": "miomipay-mock.js",
   "scripts": {
-    "start": "node miomipay-mock.js"
+    "start": "node miomipay-mock.js",
+    "mock": "node miomipay-mock.js",
+    "webhook": "node miomipay-webhook.js"
   },
   "dependencies": {
     "express": "^4.19.2"

@@ -29,6 +29,7 @@ class MiomiPayCharge {
     required this.amount,
     required this.status,
     required this.qrString,
+    this.snapToken,
     this.invoiceReference,
     this.qrImageUrl,
     this.checkoutUrl,
@@ -37,14 +38,19 @@ class MiomiPayCharge {
     this.offlineSimulation = false,
   });
 
-  /// Snap token MiomiPay. Dipakai untuk cek status dan disimpan sebagai
+  /// Referensi transaksi MiomiPay, contoh: `MP-SB-ABC123XYZ` atau
+  /// `MP-INV-20261121-ZZLEIY`. Dipakai untuk cek status dan disimpan sebagai
   /// referensi pembayaran pada pesanan.
   final String reference;
+
+  /// Snap token dari gateway. Dipakai untuk simulasi sandbox dan halaman
+  /// checkout. Tidak selalu tersedia pada respons API terbaru.
+  final String? snapToken;
 
   /// ID transaksi internal gateway.
   final String transactionId;
 
-  /// Nomor invoice MiomiPay, contoh: `MP-INV-20261120-G14S3B`.
+  /// Nomor invoice MiomiPay, contoh: `INV-20261107-XXXX`.
   final String? invoiceReference;
 
   final int amount;
@@ -77,6 +83,7 @@ class MiomiPayCharge {
   MiomiPayCharge copyWith({MiomiPayStatus? status}) {
     return MiomiPayCharge(
       reference: reference,
+      snapToken: snapToken,
       transactionId: transactionId,
       invoiceReference: invoiceReference,
       amount: amount,

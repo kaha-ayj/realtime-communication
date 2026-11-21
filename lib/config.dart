@@ -48,9 +48,11 @@ class Config {
     defaultValue: 'POS-DEMO-001',
   );
 
-  /// URL callback/webhook yang dikirim saat membuat tagihan.
-  static const String miomiPayCallbackUrl = String.fromEnvironment(
-    'MIOMIPAY_CALLBACK_URL',
+  /// URL yang dibuka customer setelah pembayaran berhasil di halaman checkout.
+  ///
+  /// Opsional. Kosongkan bila tidak memakai halaman checkout MiomiPay.
+  static const String miomiPaySuccessRedirectUrl = String.fromEnvironment(
+    'MIOMIPAY_SUCCESS_REDIRECT_URL',
   );
 
   /// `true` mengaktifkan tombol simulasi pembayaran di layar QRIS.
@@ -63,9 +65,7 @@ class Config {
 
   static String get miomiPayBaseUrl {
     final value = _miomiPayBaseUrlOverride;
-    return value.endsWith('/')
-        ? value.substring(0, value.length - 1)
-        : value;
+    return value.endsWith('/') ? value.substring(0, value.length - 1) : value;
   }
 
   /// True bila API key belum diisi.

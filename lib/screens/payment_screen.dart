@@ -141,7 +141,10 @@ class _PaymentScreenState extends State<PaymentScreen>
       final provider = context.read<AppProvider>();
       final status = _charge!.offlineSimulation
           ? MiomiPayStatus.paid
-          : await provider.miomiPayService.simulatePayment(_charge!.reference);
+          : await provider.miomiPayService.simulatePayment(
+              _charge!.reference,
+              snapToken: _charge!.snapToken,
+            );
 
       if (!mounted) return;
       setState(() => _charge = _charge!.copyWith(status: status));

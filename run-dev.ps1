@@ -19,6 +19,8 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serverDir = Join-Path $root "server"
 
 $flutterArgs = @("run", "-d", $Device)
+$server = $null
+$webhook = $null
 
 if ($UseMock) {
     if (-not (Test-Path (Join-Path $serverDir "node_modules"))) {
@@ -27,6 +29,13 @@ if ($UseMock) {
         npm install --silent
         Pop-Location
     }
+
+    Write-Host "[server] Menjalankan penerima webhook di http://localhost:4100" -ForegroundColor Cyan
+    $webhook = Start-Process -FilePath "node" `
+        -ArgumentList "miomipay-webhook.js" `
+        -WorkingDirectory $serverDir `
+        -PassThru `
+        -WindowStyle Hidden
 
     Write-Host "[server] Menjalankan MiomiPay mock server di http://localhost:4000" -ForegroundColor Cyan
     $server = Start-Process -FilePath "node" `
@@ -68,5 +77,9 @@ finally {
     if ($UseMock -and $server -and -not $server.HasExited) {
         Write-Host "[server] Menghentikan mock server..." -ForegroundColor Cyan
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($UseMock -and $webhook -and -not $webhook.HasExited) {
+        Write-Host "[server] Menghentikan webhook receiver..." -ForegroundColor Cyan
+        Stop-Process -Id $webhook.Id -Force -ErrorAction SilentlyContinue
     }
 }

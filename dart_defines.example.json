@@ -3,5 +3,5 @@
   "MIOMIPAY_BASE_URL": "https://pg.miomidev.com/api/v1",
   "MIOMIPAY_API_KEY": "ISI_API_KEY_LIVE_DI_SINI",
   "MIOMIPAY_SANDBOX": false,
-  "MIOMIPAY_CALLBACK_URL": "https://domain-anda.com/miomipay/callback"
+  "MIOMIPAY_SUCCESS_REDIRECT_URL": "https://domain-anda.com/pembayaran/sukses"
 }
